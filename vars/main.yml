@@ -5,3 +5,4 @@ variable_sets: # noqa: var-naming
 
   versions:
     - '2025.2.1'
+    - '2026.0.0'
