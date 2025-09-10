@@ -1,0 +1,235 @@
+- name: Re-gather facts
+  ansible.builtin.setup:
+
+- name: Set variables
+  ansible.builtin.set_fact:
+    major_ver: "{{ (effective_version.split('.')[:1] | join('.')) }}"
+    minor_ver: "{{ (effective_version.split('.')[-2:] | join('.')) }}"
+    download_url: >-
+      {{ (variable_sets.base_url ~ '/' ~ product_name ~ '/' ~ effective_version
+          ~ '/' ~ product_name ~ '-' ~ effective_version ~ '-win.exe') | trim }}
+
+- name: Display Application Details
+  ansible.builtin.debug:
+    msg: |
+      Download URL: {{ download_url }}
+      Software Name: {{ product_name }}
+      Version: {{ effective_version }}
+      Major Version: {{ major_ver }}
+      Minor Version: {{ minor_ver }}
+
+################################################################################
+# Run a pre installation check to see if the application is installed
+################################################################################
+
+- name: Get installed applications (registry 32/64-bit)
+  ansible.windows.win_shell: |
+      Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*,
+                        HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* |
+      Select-Object DisplayName, DisplayVersion |
+      Where-Object { $_.DisplayName } |
+      ConvertTo-Json -Depth 3
+  register: installed_apps_list
+
+- name: Parse installed apps JSON
+  set_fact:
+    _apps_raw: "{{ installed_apps_list.stdout | from_json }}"
+
+- name: Normalize installed apps to a list
+  set_fact:
+    installed_apps: "{{ _apps_raw if _apps_raw is sequence else [_apps_raw] }}"
+
+- name: Sort apps by name
+  set_fact:
+    installed_apps_sorted: >-
+      {{ installed_apps
+         | selectattr('DisplayName', 'defined')
+         | selectattr('DisplayName', 'truthy')
+         | sort(attribute='DisplayName') | list }}
+
+- name: Build neat list
+  set_fact:
+    apps_table: |-
+      {{ '%-70s %-20s'|format('Application','Version') }}
+      {{ '-' * 92 }}
+      {% for app in installed_apps_sorted %}
+      {{ '%-70s %-20s'|format(app.DisplayName | default(''), app.DisplayVersion | default('')) }}
+      {% endfor %}
+
+- name: Show table of apps
+  debug:
+    msg: "{{ apps_table }}"
+
+- name: Generate human friendly product name by removing dashes
+  ansible.builtin.set_fact:
+    formatted_product_name: "Red Giant"
+
+- name: Search for matching app
+  ansible.windows.win_shell: |
+    $apps = @'
+    {{ installed_apps_list.stdout }}
+    '@ | ConvertFrom-Json
+
+    $name    = "{{ formatted_product_name }}"
+    $version = "{{ major_ver }}"
+
+    $match = $apps | Where-Object {
+      ($_.DisplayName    -like "*$name*") -and
+      ($_.DisplayVersion -like "*$version*")
+    }
+
+    if ($match) {
+      Write-Output "True"
+    } else {
+      Write-Output "False"
+    }
+  register: search_result
+
+- name: Set installation_success to true/false
+  set_fact:
+    installation_success: "{{ (search_result.stdout | trim) == 'True' }}"
+
+- name: Report if {{ product_name }} {{ effective_version }} is installed
+  ansible.builtin.debug:
+    msg: "{{ formatted_product_name }} {{ effective_version }} is installed: {{ installation_success }}."
+
+################################################################################
+# Download and install the application if installation_success is False
+################################################################################
+
+- name: Create temporary directory for {{ product_name }} {{ effective_version }}
+  ansible.windows.win_tempfile:
+    state: directory
+  register: temp_dir
+  when: not installation_success
+
+- name: Display Temp dir path for {{ product_name }} {{ effective_version }}
+  ansible.builtin.debug:
+    msg: "Temp dir created at {{ temp_dir.path }}"
+  when: not installation_success
+
+- name: Fetch SHA1 for {{ product_name }} {{ effective_version }}
+  ansible.builtin.uri:
+    url: "{{ download_url }}.sha1"
+    method: GET
+    return_content: true
+    follow_redirects: all
+    url_username: "{{ repository_username }}"
+    url_password: "{{ repository_password }}"
+    force_basic_auth: false
+    status_code: [200]
+    validate_certs: true
+  register: sha1_resp
+  delegate_to: localhost
+  when: not installation_success
+
+- name: Extract SHA1 for {{ product_name }} {{ effective_version }}
+  ansible.builtin.set_fact:
+    redgiant_sha1: "{{ sha1_resp.content | trim }}"
+  when: not installation_success
+
+- name: Display SHA1 for {{ product_name }} {{ effective_version }}
+  ansible.builtin.debug:
+    msg: "SHA1: [{{ redgiant_sha1 }}] for {{ download_url }}"
+  when: not installation_success
+
+- name: Download {{ product_name }} "{{ temp_dir.path }}/{{ product_name }}-{{ effective_version }}-win.exe"
+  ansible.windows.win_get_url:
+    url: "{{ download_url }}"
+    dest: "{{ temp_dir.path }}\\{{ product_name }}-{{ effective_version }}-win.exe"
+    url_username: "{{ repository_username }}"
+    url_password: "{{ repository_password }}"
+    force_basic_auth: false
+    force: true
+    follow_redirects: all
+    checksum_algorithm: sha1
+    checksum: "{{ redgiant_sha1 | trim }}"
+  register: redgiant_downloaded
+  when: not installation_success
+
+- name: Locate extracted {{ product_name }} "{{ effective_version }} installer (.exe)"
+  ansible.windows.win_find:
+    paths:
+      - "{{ temp_dir.path }}"
+    patterns:
+      - "*{{ product_name }}-{{ effective_version }}-win*.exe"
+    recurse: yes
+    file_type: file
+  register: redgiant_found
+  when: not installation_success
+
+- name: Pick the installer path
+  ansible.builtin.set_fact:
+    installer_path: "{{ (redgiant_found.files | map(attribute='path') | list | first) | default('') }}"
+  when: not installation_success
+
+- name: Display the {{ product_name }} {{ effective_version }} installer file
+  ansible.builtin.debug:
+    msg:
+      - "Found {{ redgiant_found.files | length }} installer(s)"
+      - "Selected installer: {{ installer_path }}"
+  when: not installation_success
+
+- name: Install EXE (With Polling) {{ effective_version }}
+  ansible.windows.win_command: >
+    "{{ installer_path }}" --mode unattended --unattendedmodeui none
+  args:
+    chdir: "{{ temp_dir.path }}"
+  async: 1800
+  poll: 15
+  register: c4d_install
+  when:
+    - not installation_success
+    - installer_path | length > 0
+
+################################################################################
+# Post installation check to confirm the correct application has installed
+################################################################################
+
+- name: Get installed applications (registry 32/64-bit)
+  ansible.windows.win_shell: |
+      Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*,
+                        HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* |
+      Select-Object DisplayName, DisplayVersion |
+      Where-Object { $_.DisplayName } |
+      ConvertTo-Json -Depth 3
+  register: installed_apps_list
+
+- name: Search for matching app
+  ansible.windows.win_shell: |
+    $apps = @'
+    {{ installed_apps_list.stdout }}
+    '@ | ConvertFrom-Json
+
+    $name    = "{{ formatted_product_name }}"
+    $version = "{{ major_ver }}"
+
+    $match = $apps | Where-Object {
+      ($_.DisplayName    -like "*$name*") -and
+      ($_.DisplayVersion -like "*$version*")
+    }
+
+    if ($match) {
+      Write-Output "True"
+    } else {
+      Write-Output "False"
+    }
+  register: search_result
+
+- name: Set fact true/false
+  set_fact:
+    installation_success: "{{ (search_result.stdout | trim) == 'True' }}"
+
+- name: Remove temp dir for {{ product_name }} {{ effective_version }}
+  ansible.windows.win_file:
+    path: "{{ temp_dir.path }}"
+    state: absent
+  when:
+    - temp_dir is defined
+    - temp_dir.path is defined
+    - installation_success
+  ignore_errors: true
+
+- name: Report if {{ product_name }} {{ effective_version }} is installed
+  ansible.builtin.debug:
+    msg: "{{ formatted_product_name }} {{ effective_version }} is installed: {{ installation_success }}."
