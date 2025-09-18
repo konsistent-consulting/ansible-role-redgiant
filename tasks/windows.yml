@@ -62,29 +62,27 @@
     formatted_product_name: "Red Giant"
 
 - name: Search for matching app
-  ansible.windows.win_shell: |
-    $apps = @'
-    {{ installed_apps_list.stdout }}
-    '@ | ConvertFrom-Json
+  ansible.windows.win_powershell:
+    script: |
+      $apps = @'
+      {{ installed_apps_list.stdout }}
+      '@ | ConvertFrom-Json
 
-    $name    = "{{ formatted_product_name }}"
-    $version = "{{ major_ver }}"
+      $name    = {{ formatted_product_name | to_json }}
+      $version = {{ major_ver      | to_json }}
 
-    $match = $apps | Where-Object {
-      ($_.DisplayName    -like "*$name*") -and
-      ($_.DisplayVersion -like "*$version*")
-    }
+      $match = $apps | Where-Object {
+        ($_.DisplayName    -like ("*" + $name + "*")) -and
+        (($_.DisplayVersion) -as [string]) -like ("*" + $version + "*")
+      }
 
-    if ($match) {
-      Write-Output "True"
-    } else {
-      Write-Output "False"
-    }
+      if ($match) { 'True' } else { 'False' }
   register: search_result
+  changed_when: false
 
 - name: Set installation_success to true/false
-  set_fact:
-    installation_success: "{{ (search_result.stdout | trim) == 'True' }}"
+  ansible.builtin.set_fact:
+    installation_success: "{{ (search_result.output | default([]) | join('') | trim | lower) == 'true' }}"
 
 - name: Report if {{ product_name }} {{ effective_version }} is installed
   ansible.builtin.debug:
@@ -193,29 +191,27 @@
   register: installed_apps_list
 
 - name: Search for matching app
-  ansible.windows.win_shell: |
-    $apps = @'
-    {{ installed_apps_list.stdout }}
-    '@ | ConvertFrom-Json
+  ansible.windows.win_powershell:
+    script: |
+      $apps = @'
+      {{ installed_apps_list.stdout }}
+      '@ | ConvertFrom-Json
 
-    $name    = "{{ formatted_product_name }}"
-    $version = "{{ major_ver }}"
+      $name    = {{ formatted_product_name | to_json }}
+      $version = {{ major_ver      | to_json }}
 
-    $match = $apps | Where-Object {
-      ($_.DisplayName    -like "*$name*") -and
-      ($_.DisplayVersion -like "*$version*")
-    }
+      $match = $apps | Where-Object {
+        ($_.DisplayName    -like ("*" + $name + "*")) -and
+        (($_.DisplayVersion) -as [string]) -like ("*" + $version + "*")
+      }
 
-    if ($match) {
-      Write-Output "True"
-    } else {
-      Write-Output "False"
-    }
+      if ($match) { 'True' } else { 'False' }
   register: search_result
+  changed_when: false
 
-- name: Set fact true/false
-  set_fact:
-    installation_success: "{{ (search_result.stdout | trim) == 'True' }}"
+- name: Set installation_success to true/false
+  ansible.builtin.set_fact:
+    installation_success: "{{ (search_result.output | default([]) | join('') | trim | lower) == 'true' }}"
 
 - name: Remove temp dir for {{ product_name }} {{ effective_version }}
   ansible.windows.win_file:
