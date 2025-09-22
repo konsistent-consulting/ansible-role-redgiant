@@ -1,19 +1,38 @@
-- name: Set variables
-  ansible.builtin.set_fact:
-    major_ver: "{{ (effective_version.split('.')[:1] | join('.')) }}"
-    minor_ver: "{{ (effective_version.split('.')[-2:] | join('.')) }}"
-    download_url: >-
-      {{ (variable_sets.base_url ~ '/' ~ product_name ~ '/' ~ effective_version
-          ~ '/' ~ product_name ~ '-' ~ effective_version ~ '-win.exe') | trim }}
-
 - name: Display Application Details
   ansible.builtin.debug:
     msg: |
+      Windows installation of {{ product_name }}
       Download URL: {{ download_url }}
-      Software Name: {{ product_name }}
       Version: {{ effective_version }}
       Major Version: {{ major_ver }}
-      Minor Version: {{ minor_ver }}
+
+################################################################################
+# Extract filename and file extension details
+################################################################################
+
+- name: Extract filename from download URL
+  ansible.builtin.set_fact:
+    installer_file_name: "{{ (download_url | urlsplit('path')) | basename }}"
+
+- name: Extract file extension from download URL
+  ansible.builtin.set_fact:
+    download_file_extention: "{{ ((download_url | urlsplit('path')) | splitext | last) }}"
+
+- name: Extract file extension from download URL
+  ansible.builtin.set_fact:
+    installer_file_extention: "{{ installer | splitext | last }}"
+
+- name: Check if download file extension is zip
+  ansible.builtin.set_fact:
+    is_zip: "{{ (download_file_extention | lower) == '.zip' }}"
+
+- name: Check if installer is MSI
+  ansible.builtin.set_fact:
+    is_msi: "{{ (installer_file_extention | lower) == '.msi' }}"
+
+- name: Check if installer is EXE
+  ansible.builtin.set_fact:
+    is_exe: "{{ (installer_file_extention | lower) == '.exe' }}"
 
 ################################################################################
 # Run a pre installation check to see if the application is installed
@@ -57,10 +76,6 @@
   debug:
     msg: "{{ apps_table }}"
 
-- name: Generate human friendly product name by removing dashes
-  ansible.builtin.set_fact:
-    formatted_product_name: "Red Giant"
-
 - name: Search for matching app
   ansible.windows.win_powershell:
     script: |
@@ -68,8 +83,8 @@
       {{ installed_apps_list.stdout }}
       '@ | ConvertFrom-Json
 
-      $name    = {{ formatted_product_name | to_json }}
-      $version = {{ major_ver      | to_json }}
+      $name    = {{ product_name | to_json }}
+      $version = {{ effective_version | to_json }}
 
       $match = $apps | Where-Object {
         ($_.DisplayName    -like ("*" + $name + "*")) -and
@@ -86,7 +101,7 @@
 
 - name: Report if {{ product_name }} {{ effective_version }} is installed
   ansible.builtin.debug:
-    msg: "{{ formatted_product_name }} {{ effective_version }} is installed: {{ installation_success }}."
+    msg: "{{ product_name }} {{ effective_version }} is installed: {{ installation_success }}."
 
 ################################################################################
 # Download and install the application if installation_success is False
@@ -98,84 +113,151 @@
   register: temp_dir
   when: not installation_success
 
-- name: Display Temp dir path for {{ product_name }} {{ effective_version }}
-  ansible.builtin.debug:
-    msg: "Temp dir created at {{ temp_dir.path }}"
+- name: Download {{ product_name }}
   when: not installation_success
+  block:
 
-- name: Fetch SHA1 for {{ product_name }} {{ effective_version }}
-  ansible.builtin.uri:
-    url: "{{ download_url }}.sha1"
-    method: GET
-    return_content: true
-    follow_redirects: all
-    url_username: "{{ repository_username }}"
-    url_password: "{{ repository_password }}"
-    force_basic_auth: false
-    status_code: [200]
-    validate_certs: true
-  register: sha1_resp
-  delegate_to: localhost
-  when: not installation_success
+    - name: Try to fetch SHA1 for {{ product_name }} {{ effective_version }}
+      ansible.builtin.uri:
+        url: "{{ download_url }}.sha1"
+        method: GET
+        return_content: true
+        follow_redirects: all
+        url_username: "{{ repository_username | default(omit) }}"
+        url_password: "{{ repository_password | default(omit) }}"
+        force_basic_auth: false
+        validate_certs: true
+      register: sha1_resp
+      failed_when: false
+      changed_when: false
+      delegate_to: localhost
+      no_log: true
 
-- name: Extract SHA1 for {{ product_name }} {{ effective_version }}
-  ansible.builtin.set_fact:
-    redgiant_sha1: "{{ sha1_resp.content | trim }}"
-  when: not installation_success
+    - name: Clear any previous SHA1
+      ansible.builtin.set_fact:
+        product_sha1: null
+      when: not installation_success
 
-- name: Display SHA1 for {{ product_name }} {{ effective_version }}
-  ansible.builtin.debug:
-    msg: "SHA1: [{{ redgiant_sha1 }}] for {{ download_url }}"
-  when: not installation_success
+    - name: Extract SHA1 if present
+      ansible.builtin.set_fact:
+        product_sha1: >-
+          {{ (sha1_resp.status|default(0) == 200 and (sha1_resp.content | trim) is match('^[a-fA-F0-9]{40}$'))
+             | ternary(sha1_resp.content | trim, none) }}
+      when: sha1_resp is defined
 
-- name: Download {{ product_name }} "{{ temp_dir.path }}/{{ product_name }}-{{ effective_version }}-win.exe"
-  ansible.windows.win_get_url:
-    url: "{{ download_url }}"
-    dest: "{{ temp_dir.path }}\\{{ product_name }}-{{ effective_version }}-win.exe"
-    url_username: "{{ repository_username }}"
-    url_password: "{{ repository_password }}"
-    force_basic_auth: false
-    force: true
-    follow_redirects: all
-    checksum_algorithm: sha1
-    checksum: "{{ redgiant_sha1 | trim }}"
-  register: redgiant_downloaded
-  when: not installation_success
+    - name: Authenticated download
+      ansible.windows.win_get_url:
+        url: "{{ download_url }}"
+        dest: "{{ temp_dir.path }}\\{{ installer_file_name }}"
+        url_username: "{{ repository_username | default(omit) }}"
+        url_password: "{{ repository_password | default(omit) }}"
+        force_basic_auth: false
+        force: true
+        follow_redirects: all
+        checksum_algorithm: "{{ 'sha1' if (product_sha1 is defined) else omit }}"
+        checksum: "{{ product_sha1 | default(omit) }}"
+      register: product_downloaded
+      no_log: true
 
-- name: Locate extracted {{ product_name }} "{{ effective_version }} installer (.exe)"
+  rescue:
+
+    - name: Anonymous download
+      ansible.windows.win_get_url:
+        url: "{{ download_url }}"
+        dest: "{{ temp_dir.path }}\\{{ installer_file_name }}"
+        force: true
+        follow_redirects: all
+      register: product_downloaded_fallback
+
+  always:
+
+    - name: Pick which download worked
+      ansible.builtin.set_fact:
+        final_download_result: "{{ product_downloaded if (product_downloaded is defined) else product_downloaded_fallback }}"
+
+- name: Extract {{ temp_dir.path }}\{{ installer_file_name }}
+  ansible.windows.win_powershell:
+    script: |
+      $src  = "{{ temp_dir.path }}\{{ installer_file_name }}"
+      $dest = "{{ temp_dir.path }}"
+      if (-not (Test-Path -LiteralPath $dest)) {
+        New-Item -ItemType Directory -Path $dest | Out-Null
+      }
+      if (Get-Command Expand-Archive -ErrorAction SilentlyContinue) {
+        Expand-Archive -LiteralPath $src -DestinationPath $dest -Force
+      } else {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::ExtractToDirectory($src, $dest, $true)
+      }
+  register: unzip_result
+  when:
+    - not installation_success
+    - final_download_result is succeeded
+    - is_zip
+    - installer_file_name | length > 0
+
+- name: Locate installer {{ installer }}
   ansible.windows.win_find:
     paths:
       - "{{ temp_dir.path }}"
     patterns:
-      - "*{{ product_name }}-{{ effective_version }}-win*.exe"
+      - "{{ installer }}"
     recurse: yes
     file_type: file
-  register: redgiant_found
-  when: not installation_success
+  register: product_found
+  when:
+    - not installation_success
+    - final_download_result is succeeded
 
 - name: Pick the installer path
   ansible.builtin.set_fact:
-    installer_path: "{{ (redgiant_found.files | map(attribute='path') | list | first) | default('') }}"
-  when: not installation_success
+    installer_path: "{{ (product_found.files | map(attribute='path') | list | first) | default('') }}"
+  when:
+    - not installation_success
+    - final_download_result is succeeded
 
 - name: Display the {{ product_name }} {{ effective_version }} installer file
   ansible.builtin.debug:
     msg:
-      - "Found {{ redgiant_found.files | length }} installer(s)"
+      - "Found {{ product_found.files | length }} installer(s)"
       - "Selected installer: {{ installer_path }}"
-  when: not installation_success
+  when:
+    - not installation_success
+    - final_download_result is succeeded
 
-- name: Install {{ product_name }} {{ effective_version }}
+- name: Display the installation command
+  ansible.builtin.debug:
+    msg: >-
+      "{{ installer_path }}" {{ arguments | default('') | trim }}
+  when:
+    - not installation_success
+    - final_download_result is succeeded
+
+- name: Install EXE {{ product_name }} {{ effective_version }}
   ansible.windows.win_command: >
-    "{{ installer_path }}" --mode unattended --unattendedmodeui none
+    "{{ installer_path }}" {{ arguments | default('') | trim }}
   args:
     chdir: "{{ temp_dir.path }}"
-  async: 1800
-  poll: 15
-  register: c4d_install
+  async: 2400
+  poll: 30
+  register: product_install
   when:
     - not installation_success
     - installer_path | length > 0
+    - is_exe
+
+- name: Install MSI {{ product_name }} {{ effective_version }}
+  ansible.windows.win_package:
+    path: "{{ installer_path }}"
+    arguments: "{{ arguments | default('') | trim }}"
+    state: present
+  async: 2400
+  poll: 30
+  register: product_install
+  when:
+    - not installation_success
+    - installer_path | length > 0
+    - is_msi
 
 ################################################################################
 # Post installation check to confirm the correct application has installed
@@ -197,8 +279,8 @@
       {{ installed_apps_list.stdout }}
       '@ | ConvertFrom-Json
 
-      $name    = {{ formatted_product_name | to_json }}
-      $version = {{ major_ver      | to_json }}
+      $name    = {{ product_name | to_json }}
+      $version = {{ version_major | to_json }}
 
       $match = $apps | Where-Object {
         ($_.DisplayName    -like ("*" + $name + "*")) -and
@@ -225,4 +307,4 @@
 
 - name: Report if {{ product_name }} {{ effective_version }} is installed
   ansible.builtin.debug:
-    msg: "{{ formatted_product_name }} {{ effective_version }} is installed: {{ installation_success }}."
+    msg: "{{ product_name }} {{ effective_version }} is installed: {{ installation_success }}."

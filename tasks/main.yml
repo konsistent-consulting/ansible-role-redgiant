@@ -1,63 +1,20 @@
----
-# Inputs expected:
-#   selected_option: "latest" or explicit version string (e.g., "2024.2")
-#   variable_sets.versions: [list of allowed versions, oldest -> newest]
-#   variable_sets.subfolders.name: product name/display name
-
-- name: Resolve version, validate, and run OS-specific tasks (no host persistence)
-  block:
-
-    - name: Warn if user requested an invalid explicit version
-      ansible.builtin.debug:
-        msg: >-
-          [SKIP] Requested version '{{ requested_raw }}' is not allowed for '{{ selected_product_name }}'.
-          Allowed versions: {{ allowed_versions | join(', ') }}
-      when:
-        - (requested_raw | lower) != 'latest'
-        - not version_valid
-
-    - name: Show application selection
-      ansible.builtin.debug:
-        msg: |
-          Product:         {{ selected_product_name }}
-          Requested Ver:   {{ requested_raw }}
-          Resolved:        {{ resolved_version }}
-          Valid:           {{ version_valid }}
-          Allowed:         {{ allowed_versions | join(', ') }}
-
-################################################################################
+###########################################################################
 # Launch installation script based on OS
-################################################################################
+###########################################################################
 
-    - name: Run Windows-specific tasks
-      ansible.builtin.import_tasks: windows.yml
-      vars:
-        effective_version: "{{ resolved_version }}"
-        product_name: "{{ selected_product_name }}"
-      when:
-        - version_valid
-        - ansible_os_family == "Windows"
-
-    - name: Run Linux-specific tasks
-      ansible.builtin.debug:
-        msg: "{{ selected_product_name }} can only be installed on Windows OS"
-      when:
-        - ansible_os_family != "Windows"
-
-    - name: Note - skipping OS-specific tasks due to invalid version
-      ansible.builtin.debug:
-        msg: "[SKIP] OS-specific tasks not executed because version is invalid."
-      when: not version_valid
-
+- name: Run Windows-specific tasks
+  ansible.builtin.import_tasks: windows.yml
   vars:
-    allowed_versions: "{{ (variable_sets.versions | default([]) | map('string') | list) }}"
-    selected_product_name: "{{ (variable_sets.subfolders.name | default('UnknownProduct')) | string }}"
-    requested_raw: "{{ (selected_option | default('') | string) | trim }}"
-    resolved_version: >-
-      {{
-        ((requested_raw | lower) == 'latest')
-        | ternary( (allowed_versions | last | default('') | string),
-                   (requested_raw | string) )
-        | trim
-      }}
-    version_valid: "{{ (resolved_version | length > 0) and (resolved_version in allowed_versions) }}"
+    effective_version: "{{ version }}"
+    product_name: "{{ name }}"
+    download_url: "{{ windows_url }}"
+    major_ver: "{{ version_major }}"
+    installer: "{{ win_installer_name }}"
+    arguments: "{{ win_installer_args }}"
+  when: ansible_os_family == "Windows"
+
+- name: Run Linux-specific tasks
+  ansible.builtin.debug:
+    msg: "{{ selected_product_name }} can only be installed on Windows OS"
+  when:
+    - ansible_os_family != "Windows"

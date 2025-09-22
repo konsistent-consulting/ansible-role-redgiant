@@ -25,8 +25,6 @@ Example playbook for installing:
 ---
 - name: Install Red Giant
   hosts: all
-  vars:
-    selected_option: "2025.2.1"  # Set the required version here
   roles:
     - redgiant  
 ```
@@ -40,22 +38,6 @@ If you need to bring this into another Ansible Project you can add it to the `re
   src: https://github.com/konsistent-consulting/ansible-role-redgiant.git
   version: main
 ```
-
-## Adding to vars/main.yml
-
-If you have a new version of Red Giant to add, please add the following section to vars/main.yml
-within the blender role folder:
-
-```yaml
-versions:
-  - '2023.2.2'
-  - '2024.1.0'
-  - '2024.2.0'
-```
-
-Please replace the version code with the new version (i.e 2024.3.2), replace the download
-link with the correct link to the .tar.xz file from within our Nexus repository and update
-the major and minor version appropriately.
 
 You will need to run the below in your project to clone the role:
 

@@ -1,8 +1,0 @@
-variable_sets: # noqa: var-naming
-  base_url: "{{ nexus_url }}/DCC"
-  subfolders:
-    name: "Maxon-RedGiant"
-
-  versions:
-    - '2025.2.1'
-    - '2026.0.0'
