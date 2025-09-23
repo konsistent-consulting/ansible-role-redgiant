@@ -84,7 +84,7 @@
       '@ | ConvertFrom-Json
 
       $name    = {{ product_name | to_json }}
-      $version = {{ effective_version | to_json }}
+      $version = {{ major_ver | to_json }}
 
       $match = $apps | Where-Object {
         ($_.DisplayName    -like ("*" + $name + "*")) -and
@@ -280,7 +280,7 @@
       '@ | ConvertFrom-Json
 
       $name    = {{ product_name | to_json }}
-      $version = {{ version_major | to_json }}
+      $version = {{ major_ver | to_json }}
 
       $match = $apps | Where-Object {
         ($_.DisplayName    -like ("*" + $name + "*")) -and
