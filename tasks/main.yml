@@ -15,6 +15,6 @@
 
 - name: Run Linux-specific tasks
   ansible.builtin.debug:
-    msg: "{{ selected_product_name }} can only be installed on Windows OS"
+    msg: "{{ name }} can only be installed on Windows OS"
   when:
     - ansible_os_family != "Windows"
