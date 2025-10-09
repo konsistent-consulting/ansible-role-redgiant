@@ -6,7 +6,7 @@
   ansible.builtin.import_tasks: windows.yml
   vars:
     effective_version: "{{ version }}"
-    product_name: "{{ name }}"
+    product_name: "{{ pkg_name }}"
     download_url: "{{ windows_url }}"
     major_ver: "{{ version_major }}"
     installer: "{{ win_installer_name }}"
@@ -15,6 +15,6 @@
 
 - name: Run Linux-specific tasks
   ansible.builtin.debug:
-    msg: "{{ name }} can only be installed on Windows OS"
+    msg: "{{ pkg_name }} can only be installed on Windows OS"
   when:
     - ansible_os_family != "Windows"
