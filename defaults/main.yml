@@ -1,5 +1,5 @@
 ---
-name: "Red Giant"
+pkg_name: "Red Giant"
 version: "2026.0.0"
 version_major: "2026"
 windows_url: "https://repository.konsistent.co/repository/packages/DCC/Maxon-RedGiant/2026.0.0/Maxon-RedGiant-2026.0.0-win.exe"
