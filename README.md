@@ -10,14 +10,7 @@ This role has been tested on Ansible 2.16.0+ against the Distributions:
   - Windows 2022
   - Windows 2025  
 
-## Dependencies
-
-Nvidia drivers must be installed before installing Cinema 4D
-
 ## Example Playbook
-
-Make sure to include "selected_option" in your playbook to select the version of
-Blender you want to install. Please see vars/main.yml for the available versions.
 
 Example playbook for installing:
 
@@ -36,7 +29,7 @@ If you need to bring this into another Ansible Project you can add it to the `re
 ```yaml
 - name: redgiant
   src: https://github.com/konsistent-consulting/ansible-role-redgiant.git
-  version: main
+  version: "2026.0.0"
 ```
 
 You will need to run the below in your project to clone the role:
